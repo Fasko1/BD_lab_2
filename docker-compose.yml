@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: bd_postgres
+    environment:
+      POSTGRES_DB: bigdata_lab
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/init_postgres.sql:/docker-entrypoint-initdb.d/01_init_postgres.sql:ro
+      - ./data:/data:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bigdata_lab"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: bd_clickhouse
+    environment:
+      CLICKHOUSE_DB: marts
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  spark:
+    image: apache/spark:3.5.1-python3
+    container_name: bd_spark
+    user: root
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "4040:4040"
+    volumes:
+      - ./:/opt/project
+    working_dir: /opt/project
+    command: ["/bin/bash", "-lc", "sleep infinity"]
+
+volumes:
+  postgres_data:
+  clickhouse_data:
