@@ -29,23 +29,7 @@
 
 То есть Spark взаимодействует с базами данных напрямую, а не через обычные Python-вставки.
 
-В коде используются следующие подходы:
 
-```python
-spark.read.jdbc(...)
-df.write.jdbc(...)
-## 🧱 Используемые технологии
-
-- Apache Spark 3.5.3  
-- PostgreSQL 16  
-- ClickHouse  
-- Docker / Docker Compose  
-- Python / PySpark  
-
-### JDBC drivers:
-- PostgreSQL JDBC Driver  
-- ClickHouse JDBC Driver  
-.
 ├── data/                           # 10 CSV-файлов mock_data
 ├── sql/
 │   ├── init_postgres.sql           # создание таблицы mock_data
