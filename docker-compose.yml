@@ -38,16 +38,34 @@ services:
       retries: 10
 
   spark:
-    image: apache/spark:3.5.1-python3
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
     container_name: bd_spark
-    user: root
     depends_on:
       postgres:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+    environment:
+      PROJECT_ROOT: /opt/project
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: bigdata_lab
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_HTTP_PORT: 8123
+      CLICKHOUSE_JDBC_PORT: 8123
+      CLICKHOUSE_DB: marts
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+
+      SPARK_JDBC_JARS: /opt/bitnami/spark/custom-jars/postgresql-42.7.10.jar:/opt/bitnami/spark/custom-jars/clickhouse-jdbc-0.7.1.jar
     ports:
       - "4040:4040"
+      - "8888:8888"
     volumes:
       - ./:/opt/project
     working_dir: /opt/project
