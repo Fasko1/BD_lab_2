@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   postgres:
     image: postgres:16
@@ -25,7 +27,7 @@ services:
       CLICKHOUSE_DB: marts
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: clickhouse
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     ports:
       - "8123:8123"
       - "9000:9000"
@@ -38,9 +40,6 @@ services:
       retries: 10
 
   spark:
-    build:
-      context: .
-      dockerfile: Dockerfile.spark
     build:
       context: .
       dockerfile: Dockerfile.spark
@@ -71,7 +70,6 @@ services:
       SPARK_JARS: /opt/bitnami/spark/jars/postgresql-42.7.10.jar,/opt/bitnami/spark/jars/clickhouse-jdbc-0.7.1.jar
     ports:
       - "4040:4040"
-      - "8888:8888"
       - "8888:8888"
     volumes:
       - ./:/opt/project
