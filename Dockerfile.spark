@@ -1,0 +1,30 @@
+FROM public.ecr.aws/bitnami/spark:3.5.3
+
+USER root
+
+RUN mkdir -p /opt/bitnami/spark/custom-jars
+
+ADD https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.10/postgresql-42.7.10.jar /opt/bitnami/spark/custom-jars/postgresql-42.7.10.jar
+ADD https://repo1.maven.org/maven2/com/clickhouse/clickhouse-jdbc/0.7.1/clickhouse-jdbc-0.7.1.jar /opt/bitnami/spark/custom-jars/clickhouse-jdbc-0.7.1.jar
+
+RUN cp /opt/bitnami/spark/custom-jars/postgresql-42.7.10.jar /opt/bitnami/spark/jars/postgresql-42.7.10.jar \
+    && cp /opt/bitnami/spark/custom-jars/clickhouse-jdbc-0.7.1.jar /opt/bitnami/spark/jars/clickhouse-jdbc-0.7.1.jar \
+    && chown -R 1001:1001 /opt/bitnami/spark/custom-jars /opt/bitnami/spark/jars/postgresql-42.7.10.jar /opt/bitnami/spark/jars/clickhouse-jdbc-0.7.1.jar
+
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir \
+        pyspark==3.5.3 \
+        psycopg2-binary==2.9.9 \
+        clickhouse-connect==0.8.11 \
+        pandas==2.2.2 \
+        jupyterlab
+
+ENV POSTGRES_JDBC_JAR=/opt/bitnami/spark/jars/postgresql-42.7.10.jar
+ENV CLICKHOUSE_JDBC_JAR=/opt/bitnami/spark/jars/clickhouse-jdbc-0.7.1.jar
+ENV SPARK_JARS=/opt/bitnami/spark/jars/postgresql-42.7.10.jar,/opt/bitnami/spark/jars/clickhouse-jdbc-0.7.1.jar
+ENV PATH=/opt/bitnami/python/bin:/opt/bitnami/python/.local/bin:$PATH
+
+USER 1001
+
+WORKDIR /opt/project
+CMD ["/bin/bash", "-lc", "sleep infinity"]

@@ -41,6 +41,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.spark
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
     container_name: bd_spark
     depends_on:
       postgres:
@@ -49,6 +52,7 @@ services:
         condition: service_healthy
     environment:
       PROJECT_ROOT: /opt/project
+
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: bigdata_lab
@@ -62,9 +66,12 @@ services:
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: clickhouse
 
-      SPARK_JDBC_JARS: /opt/bitnami/spark/custom-jars/postgresql-42.7.10.jar:/opt/bitnami/spark/custom-jars/clickhouse-jdbc-0.7.1.jar
+      POSTGRES_JDBC_JAR: /opt/bitnami/spark/jars/postgresql-42.7.10.jar
+      CLICKHOUSE_JDBC_JAR: /opt/bitnami/spark/jars/clickhouse-jdbc-0.7.1.jar
+      SPARK_JARS: /opt/bitnami/spark/jars/postgresql-42.7.10.jar,/opt/bitnami/spark/jars/clickhouse-jdbc-0.7.1.jar
     ports:
       - "4040:4040"
+      - "8888:8888"
       - "8888:8888"
     volumes:
       - ./:/opt/project

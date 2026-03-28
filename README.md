@@ -1,177 +1,299 @@
 # Big Data Spark — Лабораторная работа №2
-## ETL-пайплайн на Apache Spark
-М80-303Б-23 Кунавин Кирилл Витальевич
+## ETL-пайплайн на Apache Spark с JDBC-интеграцией
+
 ---
 
 ## 📌 Описание проекта
 
-В рамках лабораторной работы реализован ETL-пайплайн с использованием Apache Spark.
+В рамках лабораторной работы реализован ETL-пайплайн на Apache Spark для обработки больших данных.
 
 Пайплайн выполняет следующие этапы:
-1. Загрузка исходных данных из CSV-файлов в PostgreSQL (таблица `mock_data`)
-2. Построение модели данных "звезда" (fact + dimension tables) в PostgreSQL
-3. Формирование аналитических витрин (data marts) с помощью Spark
-4. Загрузка витрин в ClickHouse (OLAP БД)
+
+1. Чтение исходных CSV-файлов средствами Spark  
+2. Загрузка данных в PostgreSQL (`mock_data`) через Spark JDBC  
+3. Построение модели данных «звезда» в PostgreSQL  
+4. Чтение модели «звезда» из PostgreSQL через Spark JDBC  
+5. Формирование аналитических витрин средствами Spark  
+6. Загрузка витрин в ClickHouse через Spark JDBC  
 
 ---
-## 📌 Особенности данных
+## Главное требование лабораторной
 
-Исходные данные (mock_data) являются синтетическими и содержат большое количество уникальных комбинаций значений.
+Основная сложность лабораторной работы — интеграция Spark с базами данных.
 
-В результате:
-- некоторые измерения (например, dim_stores и dim_suppliers) имеют размер, близкий к фактовой таблице
-- это связано с высокой уникальностью данных, а не с ошибкой ETL-процесса
+В данной работе это требование выполнено следующим образом:
 
-В реальных системах такие измерения обычно имеют значительно меньший размер за счёт повторяющихся значений и дополнительной нормализации.
+- Spark читает и пишет в PostgreSQL через JDBC
+- Spark читает и пишет в ClickHouse через JDBC
+- PostgreSQL JDBC driver и ClickHouse JDBC driver добавлены внутрь Spark-контейнера через `Dockerfile.spark`
+
+То есть Spark взаимодействует с базами данных напрямую, а не через обычные Python-вставки.
+
+В коде используются следующие подходы:
+
+```python
+spark.read.jdbc(...)
+df.write.jdbc(...)
 ## 🧱 Используемые технологии
 
-- Apache Spark 3.5.1
-- PostgreSQL 16
-- ClickHouse
-- Docker / Docker Compose
-- Python (PySpark, pandas, psycopg2)
+- Apache Spark 3.5.3  
+- PostgreSQL 16  
+- ClickHouse  
+- Docker / Docker Compose  
+- Python / PySpark  
+
+### JDBC drivers:
+- PostgreSQL JDBC Driver  
+- ClickHouse JDBC Driver  
+.
+├── data/                           # 10 CSV-файлов mock_data
+├── sql/
+│   ├── init_postgres.sql           # создание таблицы mock_data
+│   └── create_star_schema.sql      # создание схемы звезда
+├── Dockerfile.spark                # образ Spark с JDBC-драйверами
+├── docker-compose.yml
+├── etl_to_star.py                  # ETL: CSV -> PostgreSQL (mock_data + star schema)
+├── marts_to_clickhouse.py          # ETL: PostgreSQL star schema -> ClickHouse marts
+├── requirements.txt
+└── README.md
+
+## ⚙️ Ключевая особенность
+
+Интеграция с базами данных реализована через JDBC:
+
+- PostgreSQL JDBC Driver  
+- ClickHouse JDBC Driver  
+
+Драйверы:
+- добавлены в Spark-контейнер через `Dockerfile.spark`
+- подключены через:
+  - `spark.driver.extraClassPath`
+  - `spark.executor.extraClassPath`
+
+Spark напрямую работает с БД:
+
+```python
+spark.read.jdbc(...)
+df.write.jdbc(...)
+```
 
 ---
 
-## 📁 Структура проекта
+## 🧱 Используемые технологии
 
-```bash
-.
-├── data/                      # CSV файлы (10 файлов по 1000 строк)
-├── sql/
-│   ├── init_postgres.sql      # создание таблицы mock_data
-│   └── create_star_schema.sql # создание схемы звезда
-├── etl_to_star.py             # ETL: CSV → PostgreSQL (звезда)
-├── marts_to_clickhouse.py     # ETL: звезда → витрины (ClickHouse)
-├── docker-compose.yml
-├── requirements.txt
-└── README_run.md
-```
+- Apache Spark 3.5.3  
+- PostgreSQL 16  
+- ClickHouse  
+- Docker / Docker Compose  
+- Python / PySpark  
+
+### JDBC drivers:
+- PostgreSQL JDBC Driver  
+- ClickHouse JDBC Driver  
+
+---
+
+## 🐳 Состав контейнеров
+
+Проект запускается через `docker compose`:
+
+- **postgres** — хранение исходных данных и модели «звезда»  
+- **clickhouse** — хранение аналитических витрин  
+- **spark** — выполнение ETL + JDBC драйверы  
+
+---
+
+## 📂 Исходные данные
+
+Используются файлы `MOCK_DATA*.csv`.
+
+### Требования:
+- 10 файлов  
+- по 1000 строк  
+- всего 10000 строк в `mock_data`  
+
+---
+
+## ⚠️ Особенности данных
+
+Данные синтетические и высокоразнообразные.
+
+В результате:
+
+- `dim_stores` и `dim_suppliers` почти равны по размеру факту  
+- это нормально и не ошибка  
+
+---
+
+## 🧩 Модель данных (PostgreSQL)
+
+### Таблица фактов:
+- `fact_sales`
+
+### Таблицы измерений:
+- `dim_customers`
+- `dim_sellers`
+- `dim_products`
+- `dim_stores`
+- `dim_suppliers`
+- `dim_dates`
+
+---
+
+## 📊 Аналитические витрины (ClickHouse)
+
+- `mart_sales_products`
+- `mart_sales_customers`
+- `mart_sales_time`
+- `mart_sales_stores`
+- `mart_sales_suppliers`
+- `mart_product_quality`
+
+---
+
+## 🧠 Логика витрин
+
+### 1. mart_sales_products
+- топ-10 продуктов  
+- выручка, продажи, рейтинг  
+
+### 2. mart_sales_customers
+- топ-10 клиентов  
+- средний чек  
+
+### 3. mart_sales_time
+- тренды по месяцам и годам  
+
+### 4. mart_sales_stores
+- топ-5 магазинов  
+
+### 5. mart_sales_suppliers
+- топ-5 поставщиков  
+
+### 6. mart_product_quality
+- рейтинг + продажи  
+- `revenue_per_review`
+
+---
+
+## ⚙️ Подготовка
+
+Перед запуском:
+
+- положить CSV в `data/`
+- убедиться, что есть:
+  - `Dockerfile.spark`
+  - `docker-compose.yml`
+  - `etl_to_star.py`
+  - `marts_to_clickhouse.py`
+  - `sql/`
 
 ---
 
 ## 🚀 Запуск проекта
 
-### 1. Запуск контейнеров
+### 1. Поднять контейнеры
 
 ```bash
-docker compose up -d
+docker compose down -v
+docker compose up --build -d
 ```
 
 ---
 
-### 2. Запуск ETL в звезду (PostgreSQL)
+### 2. ETL → PostgreSQL
 
 ```bash
-docker exec -it bd_spark /opt/spark/bin/spark-submit etl_to_star.py
+docker exec -it bd_spark spark-submit etl_to_star.py
 ```
 
-После выполнения:
-- таблица `mock_data` содержит 10000 строк
-- создаются таблицы:
-  - fact_sales
-  - dim_customers
-  - dim_products
-  - dim_sellers
-  - dim_stores
-  - dim_suppliers
-  - dim_dates
+Скрипт выполняет:
+
+- чтение CSV  
+- загрузку в `public.mock_data` через Spark JDBC  
+- построение измерений  
+- построение `fact_sales`  
+- загрузку звезды в PostgreSQL  
+
+Результат:
+
+- `public.mock_data: 10000`  
+- `public.fact_sales: 10000`  
 
 ---
 
-### 3. Построение витрин в ClickHouse
+### 3. Витрины → ClickHouse
 
 ```bash
-docker exec -it bd_spark /opt/spark/bin/spark-submit marts_to_clickhouse.py
+docker exec -it bd_spark spark-submit marts_to_clickhouse.py
 ```
 
-После выполнения создаются 6 витрин:
+Скрипт выполняет:
 
-- mart_sales_products
-- mart_sales_customers
-- mart_sales_time
-- mart_sales_stores
-- mart_sales_suppliers
-- mart_product_quality
+- чтение star schema через JDBC  
+- объединение данных  
+- расчет витрин  
+- загрузку в ClickHouse  
 
 ---
 
-## 📊 Описание витрин
-
-### 1. Витрина продаж по продуктам
-- топ-10 продуктов по выручке
-- количество продаж
-- средний рейтинг
-- количество отзывов
-
-### 2. Витрина продаж по клиентам
-- топ-10 клиентов по сумме покупок
-- средний чек
-- распределение по странам
-
-### 3. Витрина продаж по времени
-- месячные и годовые тренды
-- средний чек по месяцам
-
-### 4. Витрина продаж по магазинам
-- топ-5 магазинов по выручке
-- средний чек
-- география продаж
-
-### 5. Витрина продаж по поставщикам
-- топ-5 поставщиков
-- средняя цена товаров
-- распределение по странам
-
-### 6. Витрина качества продукции
-- рейтинг товаров
-- количество отзывов
-- связь рейтинга и продаж
-
----
-
-## 🔍 Проверка данных
+## 🔍 Проверка
 
 ### PostgreSQL
 
 ```sql
-SELECT COUNT(*) FROM mock_data;
-SELECT COUNT(*) FROM fact_sales;
-SELECT COUNT(*) FROM dim_customers;
-SELECT COUNT(*) FROM dim_products;
-SELECT COUNT(*) FROM dim_stores;
-SELECT COUNT(*) FROM dim_suppliers;
+SELECT COUNT(*) FROM public.mock_data;
+SELECT COUNT(*) FROM public.fact_sales;
 ```
-
----
 
 ### ClickHouse
 
 ```sql
 SELECT count() FROM marts.mart_sales_products;
 SELECT count() FROM marts.mart_sales_customers;
-SELECT count() FROM marts.mart_sales_time;
-SELECT count() FROM marts.mart_sales_stores;
-SELECT count() FROM marts.mart_sales_suppliers;
-SELECT count() FROM marts.mart_product_quality;
 ```
 
 ---
 
-## ⚠️ Примечания
+## 🔌 JDBC-интеграция
 
-- Данные автоматически загружаются в PostgreSQL через Spark (ETL-пайплайн)
-- В качестве OLAP-хранилища используется ClickHouse
-- Дополнительные NoSQL БД (Cassandra, MongoDB и др.) не реализованы (опционально)
+В работе:
+
+- драйверы лежат внутри Spark-контейнера  
+- Spark использует их напрямую  
+- чтение и запись выполняются самим Spark  
+
+👉 Это соответствует требованиям лабораторной  
+
+---
+
+## ✅ Что реализовано
+
+- ETL на Spark  
+- модель «звезда»  
+- 6 витрин  
+- интеграция через JDBC  
+- Docker окружение  
 
 ---
 
-## ✅ Результат
+## ❌ Не реализовано (опционально)
 
-- Реализован полный ETL-пайплайн
-- Построена модель данных "звезда"
-- Созданы аналитические витрины
-- Данные загружены в ClickHouse
-- Проект полностью запускается через Docker
+- Cassandra  
+- Neo4j  
+- MongoDB  
+- Valkey  
 
 ---
+
+## 🏁 Итог
+
+Реализован ETL-пайплайн, который:
+
+- читает CSV  
+- строит star schema  
+- формирует витрины  
+- пишет в ClickHouse  
+- использует JDBC  
+
+Проект полностью готов к проверке.

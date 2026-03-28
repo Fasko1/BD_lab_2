@@ -1,10 +1,9 @@
 import glob
 import os
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
 import psycopg2
-from psycopg2.extras import execute_values
 from pyspark.sql import SparkSession, functions as F, types as T
 from pyspark.sql.window import Window
 
@@ -16,8 +15,21 @@ POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
 
 PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", "/opt/project"))
-BATCH_SIZE = 2000
 
+SPARK_JARS = os.getenv(
+    "SPARK_JARS",
+    "/opt/bitnami/spark/jars/postgresql-42.7.10.jar,"
+    "/opt/bitnami/spark/jars/clickhouse-jdbc-0.7.1.jar",
+)
+
+POSTGRES_JDBC_URL = f"jdbc:postgresql://{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+
+POSTGRES_JDBC_PROPS = {
+    "user": POSTGRES_USER,
+    "password": POSTGRES_PASSWORD,
+    "driver": "org.postgresql.Driver",
+    "stringtype": "unspecified",
+}
 
 RAW_COLUMNS = [
     "sale_id",
@@ -71,7 +83,6 @@ RAW_COLUMNS = [
     "supplier_city",
     "supplier_country",
 ]
-
 
 DIM_CUSTOMERS_COLUMNS = [
     "customer_key",
@@ -163,7 +174,7 @@ FACT_COLUMNS = [
 ]
 
 
-def get_connection():
+def get_pg_connection():
     return psycopg2.connect(
         host=POSTGRES_HOST,
         port=POSTGRES_PORT,
@@ -173,14 +184,42 @@ def get_connection():
     )
 
 
-def execute_sql_file(conn, filepath: Path) -> None:
+def execute_sql_file(filepath: Path) -> None:
     if not filepath.exists():
-        raise FileNotFoundError("SQL файл не найден: {}".format(filepath))
-    with filepath.open("r", encoding="utf-8") as f:
-        sql = f.read()
-    with conn.cursor() as cur:
-        cur.execute(sql)
-    conn.commit()
+        raise FileNotFoundError(f"SQL файл не найден: {filepath}")
+
+    sql = filepath.read_text(encoding="utf-8")
+
+    conn = get_pg_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def truncate_postgres_tables() -> None:
+    conn = get_pg_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE public.mock_data;")
+            cur.execute(
+                """
+                TRUNCATE TABLE
+                    fact_sales,
+                    dim_customers,
+                    dim_sellers,
+                    dim_products,
+                    dim_stores,
+                    dim_suppliers,
+                    dim_dates
+                RESTART IDENTITY CASCADE;
+                """
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def discover_csv_files(project_root: Path) -> List[str]:
@@ -188,7 +227,7 @@ def discover_csv_files(project_root: Path) -> List[str]:
         str(project_root / "**" / "MOCK_DATA*.csv"),
         str(project_root / "**" / "*.csv"),
     ]
-    candidates: List[str] = []
+    candidates = []
     for pattern in patterns:
         candidates.extend(glob.glob(pattern, recursive=True))
 
@@ -201,13 +240,16 @@ def discover_csv_files(project_root: Path) -> List[str]:
 
 
 def build_spark() -> SparkSession:
-    return (
+    builder = (
         SparkSession.builder
         .appName("bigdata-lab-etl-to-star")
         .master("local[*]")
         .config("spark.sql.shuffle.partitions", "4")
-        .getOrCreate()
+        .config("spark.jars", SPARK_JARS)
+        .config("spark.driver.extraClassPath", SPARK_JARS.replace(",", ":"))
+        .config("spark.executor.extraClassPath", SPARK_JARS.replace(",", ":"))
     )
+    return builder.getOrCreate()
 
 
 def normalize_strings(df):
@@ -254,34 +296,6 @@ def read_raw_data(spark: SparkSession, csv_files: List[str]):
     )
 
     return typed_df.select(*RAW_COLUMNS)
-
-
-def truncate_and_insert(conn, table_name: str, columns: List[str], rows: List[Tuple]) -> None:
-    with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE {} CASCADE;".format(table_name))
-        if rows:
-            query = "INSERT INTO {} ({}) VALUES %s".format(table_name, ", ".join(columns))
-            execute_values(cur, query, rows, page_size=BATCH_SIZE)
-    conn.commit()
-
-
-def spark_df_to_rows(df, columns):
-    rows = []
-    for row in df.select(*columns).toLocalIterator():
-        values = []
-        for col in columns:
-            value = row[col]
-            if hasattr(value, "item"):
-                value = value.item()
-            values.append(value)
-        rows.append(tuple(values))
-    return rows
-
-
-def load_mock_data(conn, df) -> None:
-    rows = spark_df_to_rows(df, RAW_COLUMNS)
-    truncate_and_insert(conn, "public.mock_data", RAW_COLUMNS, rows)
-    print("Загружено строк в public.mock_data: {}".format(len(rows)))
 
 
 def build_dimensions(df):
@@ -367,10 +381,7 @@ def build_dimensions(df):
             )
         )
         .dropDuplicates(["store_nk"])
-        .withColumn(
-            "store_key",
-            F.row_number().over(Window.orderBy("store_nk"))
-        )
+        .withColumn("store_key", F.row_number().over(Window.orderBy("store_nk")))
         .select(
             "store_key",
             "store_name",
@@ -482,16 +493,8 @@ def build_fact(df, dim_stores, dim_suppliers):
 
     fact_df = (
         fact_source
-        .join(
-            dim_stores_for_join,
-            on="store_nk",
-            how="left",
-        )
-        .join(
-            dim_suppliers.select("supplier_key", *supplier_join_cols),
-            on=supplier_join_cols,
-            how="left",
-        )
+        .join(dim_stores_for_join, on="store_nk", how="left")
+        .join(dim_suppliers.select("supplier_key", *supplier_join_cols), on=supplier_join_cols, how="left")
         .withColumn("source_sale_id", F.col("sale_id").cast(T.LongType()))
         .withColumn("date_key", F.date_format("sale_date", "yyyyMMdd").cast(T.IntegerType()))
         .withColumn("customer_key", F.col("sale_customer_id").cast(T.LongType()))
@@ -508,139 +511,81 @@ def build_fact(df, dim_stores, dim_suppliers):
             "sale_quantity",
             "sale_total_price",
         )
-        .withColumn(
-            "sale_key",
-            F.row_number().over(Window.orderBy("source_sale_id"))
-        )
-        .select(
-            "sale_key",
-            "source_sale_id",
-            "date_key",
-            "customer_key",
-            "seller_key",
-            "product_key",
-            "store_key",
-            "supplier_key",
-            "sale_quantity",
-            "sale_total_price",
-        )
+        .withColumn("sale_key", F.row_number().over(Window.orderBy("source_sale_id")))
+        .select(*FACT_COLUMNS)
         .orderBy("sale_key")
     )
 
     return fact_df
 
 
-def load_star_schema(
-    conn,
-    dim_customers,
-    dim_sellers,
-    dim_products,
-    dim_stores,
-    dim_suppliers,
-    dim_dates,
-    fact_df,
-) -> None:
-    truncate_and_insert(
-        conn,
-        "dim_customers",
-        DIM_CUSTOMERS_COLUMNS,
-        spark_df_to_rows(dim_customers, DIM_CUSTOMERS_COLUMNS),
-    )
-    truncate_and_insert(
-        conn,
-        "dim_sellers",
-        DIM_SELLERS_COLUMNS,
-        spark_df_to_rows(dim_sellers, DIM_SELLERS_COLUMNS),
-    )
-    truncate_and_insert(
-        conn,
-        "dim_products",
-        DIM_PRODUCTS_COLUMNS,
-        spark_df_to_rows(dim_products, DIM_PRODUCTS_COLUMNS),
-    )
-    truncate_and_insert(
-        conn,
-        "dim_stores",
-        DIM_STORES_COLUMNS,
-        spark_df_to_rows(dim_stores, DIM_STORES_COLUMNS),
-    )
-    truncate_and_insert(
-        conn,
-        "dim_suppliers",
-        DIM_SUPPLIERS_COLUMNS,
-        spark_df_to_rows(dim_suppliers, DIM_SUPPLIERS_COLUMNS),
-    )
-    truncate_and_insert(
-        conn,
-        "dim_dates",
-        DIM_DATES_COLUMNS,
-        spark_df_to_rows(dim_dates, DIM_DATES_COLUMNS),
-    )
-    truncate_and_insert(
-        conn,
-        "fact_sales",
-        FACT_COLUMNS,
-        spark_df_to_rows(fact_df, FACT_COLUMNS),
+def write_postgres_table(df, table_name: str) -> None:
+    (
+        df.write
+        .mode("append")
+        .jdbc(
+            url=POSTGRES_JDBC_URL,
+            table=table_name,
+            properties=POSTGRES_JDBC_PROPS,
+        )
     )
 
 
-def print_row_counts(conn) -> None:
+def print_postgres_counts(spark: SparkSession) -> None:
     tables = [
-        "mock_data",
-        "dim_customers",
-        "dim_sellers",
-        "dim_products",
-        "dim_stores",
-        "dim_suppliers",
-        "dim_dates",
-        "fact_sales",
+        "public.mock_data",
+        "public.dim_customers",
+        "public.dim_sellers",
+        "public.dim_products",
+        "public.dim_stores",
+        "public.dim_suppliers",
+        "public.dim_dates",
+        "public.fact_sales",
     ]
-    with conn.cursor() as cur:
-        for table in tables:
-            cur.execute("SELECT COUNT(*) FROM {}".format(table))
-            count = cur.fetchone()[0]
-            print("{}: {}".format(table, count))
+    for table in tables:
+        cnt = (
+            spark.read.jdbc(
+                url=POSTGRES_JDBC_URL,
+                table=f"(SELECT COUNT(*) AS cnt FROM {table}) t",
+                properties=POSTGRES_JDBC_PROPS,
+            )
+            .collect()[0]["cnt"]
+        )
+        print(f"{table}: {cnt}")
 
 
 def main() -> None:
-    print("=== ETL: CSV -> PostgreSQL mock_data -> звезда PostgreSQL ===")
+    print("=== ETL: CSV -> PostgreSQL mock_data -> звезда PostgreSQL (через Spark JDBC) ===")
     print("PROJECT_ROOT:", PROJECT_ROOT)
 
     csv_files = discover_csv_files(PROJECT_ROOT)
     print("Найдены CSV:")
     for path in csv_files:
-        print("  - {}".format(path))
+        print(f"  - {path}")
+
+    execute_sql_file(PROJECT_ROOT / "sql" / "init_postgres.sql")
+    execute_sql_file(PROJECT_ROOT / "sql" / "create_star_schema.sql")
+    truncate_postgres_tables()
 
     spark = build_spark()
     try:
         raw_df = read_raw_data(spark, csv_files)
-        print("Считано строк из CSV: {}".format(raw_df.count()))
+        print(f"Считано строк из CSV: {raw_df.count()}")
 
-        conn = get_connection()
-        try:
-            execute_sql_file(conn, PROJECT_ROOT / "sql" / "init_postgres.sql")
-            execute_sql_file(conn, PROJECT_ROOT / "sql" / "create_star_schema.sql")
+        dim_customers, dim_sellers, dim_products, dim_stores, dim_suppliers, dim_dates = build_dimensions(raw_df)
+        fact_df = build_fact(raw_df, dim_stores, dim_suppliers)
 
-            load_mock_data(conn, raw_df)
+        write_postgres_table(raw_df.select(*RAW_COLUMNS), "public.mock_data")
+        write_postgres_table(dim_customers.select(*DIM_CUSTOMERS_COLUMNS), "public.dim_customers")
+        write_postgres_table(dim_sellers.select(*DIM_SELLERS_COLUMNS), "public.dim_sellers")
+        write_postgres_table(dim_products.select(*DIM_PRODUCTS_COLUMNS), "public.dim_products")
+        write_postgres_table(dim_stores.select(*DIM_STORES_COLUMNS), "public.dim_stores")
+        write_postgres_table(dim_suppliers.select(*DIM_SUPPLIERS_COLUMNS), "public.dim_suppliers")
+        write_postgres_table(dim_dates.select(*DIM_DATES_COLUMNS), "public.dim_dates")
+        write_postgres_table(fact_df.select(*FACT_COLUMNS), "public.fact_sales")
 
-            dim_customers, dim_sellers, dim_products, dim_stores, dim_suppliers, dim_dates = build_dimensions(raw_df)
-            fact_df = build_fact(raw_df, dim_stores, dim_suppliers)
-
-            load_star_schema(
-                conn,
-                dim_customers,
-                dim_sellers,
-                dim_products,
-                dim_stores,
-                dim_suppliers,
-                dim_dates,
-                fact_df,
-            )
-
-            print("Загрузка в звезду завершена.")
-            print_row_counts(conn)
-        finally:
-            conn.close()
+        print("Загрузка в звезду завершена.")
+        print_postgres_counts(spark)
     finally:
         spark.stop()
 
